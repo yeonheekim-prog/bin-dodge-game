@@ -36,7 +36,7 @@
   <div class="title">🗑️ 쓰레기통 피하기</div>
   <div class="subtitle">등굣길 대작전!<br>매주 수거일마다 길을 막는<br>쓰레기통을 피해서 학교에 가자</div>
   <button class="btn" id="startBtn">시작하기</button>
-  <div class="hint">👈 화면 왼쪽 탭 = 왼쪽으로<br>화면 오른쪽 탭 = 오른쪽으로 👉</div>
+  <div class="hint">👈 화면 왼쪽 탭 = 왼쪽으로<br>화면 오른쪽 탭 = 오른쪽으로 👉<br><br>🐦‍⬛ 경고가 뜨면 까치가 급습해요! 재빨리 피하세요</div>
 </div>
 
 <div id="overOverlay" class="overlay hidden">
@@ -47,7 +47,7 @@
   <div class="hint" id="overHint">내일도 학교는 가야 하니까!</div>
 </div>
 
-<div class="ver">버전 1</div>
+<div class="ver">버전 2</div>
 
 <script>
 (function(){
@@ -58,7 +58,7 @@
 
   function resize(){
     DPR = Math.min(window.devicePixelRatio || 1, 2);
-    W = window.innerWidth; H = window.innerHeight;
+    W = window.innerWidth || 390; H = window.innerHeight || 844;
     canvas.width = W * DPR; canvas.height = H * DPR;
     canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
@@ -79,6 +79,7 @@
   // ----- 게임 상태 -----
   var state = 'start'; // start | play | over
   var player, bins, decos, dist, speed, spawnIn, runPhase, shakeT, best;
+  var magpies, magpieWarn, magpieTimer, killedBy;
   var BEST_KEY = 'bin-dodge-best-v1';
   best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0;
 
@@ -86,8 +87,12 @@
     player = { lane:1, x: laneX(1), alive:true };
     bins = [];
     decos = [];
+    magpies = [];
+    magpieWarn = null;
+    magpieTimer = 6;
+    killedBy = null;
     dist = 0;
-    speed = H * 0.42;
+    speed = H * 0.5;
     spawnIn = H * 0.5;
     runPhase = 0;
     shakeT = 0;
@@ -109,8 +114,8 @@
   // ----- 쓰레기통 생성 -----
   var LID_COLORS = ['#d63031','#fdcb6e','#00b894']; // 호주 빨강/노랑/초록 뚜껑
   function spawnBins(){
-    var difficulty = Math.min(dist / 800, 1);
-    var blockTwo = Math.random() < 0.25 + 0.45 * difficulty;
+    var difficulty = Math.min(dist / 600, 1);
+    var blockTwo = Math.random() < 0.35 + 0.5 * difficulty;
     var lanes = [0,1,2];
     // 무작위 섞기
     for (var i = lanes.length - 1; i > 0; i--) {
@@ -198,8 +203,11 @@
     setTimeout(function(){
       document.getElementById('finalScore').textContent = m + 'm';
       document.getElementById('bestLine').textContent = (isBest ? '🎉 신기록! ' : '') + '최고 기록: ' + best + 'm';
-      document.getElementById('overTitle').textContent = isBest ? '대단해요! 🏆' : '아이쿠! 🗑️💥';
-      document.getElementById('overHint').textContent = m >= 500 ? '이 정도면 학교까지 거의 다 왔었는데!' : '내일도 학교는 가야 하니까!';
+      var title = killedBy === 'magpie' ? '까치의 급습! 🐦⚡' : '아이쿠! 🗑️💥';
+      document.getElementById('overTitle').textContent = isBest ? '대단해요! 🏆' : title;
+      var hint = killedBy === 'magpie' ? '까치 시즌엔 조심 또 조심!'
+        : (m >= 500 ? '이 정도면 학교까지 거의 다 왔었는데!' : '내일도 학교는 가야 하니까!');
+      document.getElementById('overHint').textContent = hint;
       overOverlay.classList.remove('hidden');
     }, 600);
   }
@@ -210,7 +218,7 @@
     if (shakeT > 0) shakeT -= dt;
     if (state !== 'play') return;
 
-    speed = H * (0.42 + Math.min(dist / 1500, 1) * 0.38);
+    speed = H * (0.5 + Math.min(dist / 1000, 1) * 0.42);
     var dy = speed * dt;
     dist += dy / (H * 0.12); // 미터 환산
     runPhase += dt * (8 + speed / H * 6);
@@ -237,12 +245,52 @@
       }
     }
 
-    // 생성
+    // 생성 (까치 이벤트 중에는 새 줄이 안 나옴 — 협공 방지)
+    var magpieActive = !!magpieWarn;
+    for (i = 0; i < magpies.length; i++) {
+      if (magpies[i].y < playerY + 60 * unit) { magpieActive = true; break; }
+    }
     spawnIn -= dy;
-    if (spawnIn <= 0) {
+    if (spawnIn <= 0 && !magpieActive) {
       spawnBins();
-      var gap = H * (0.42 - Math.min(dist / 2000, 1) * 0.12);
-      spawnIn = gap + Math.random() * H * 0.15;
+      var gap = H * (0.34 - Math.min(dist / 1500, 1) * 0.1);
+      spawnIn = gap + Math.random() * H * 0.12;
+    }
+
+    // 까치 급습 (60m부터). 근처에 통이 2개 이상이면(3차선 전부 막힐 위험) 잠시 미룸
+    if (dist > 60 && !magpieWarn) {
+      magpieTimer -= dt;
+      var nearCount = 0;
+      for (i = 0; i < bins.length; i++) {
+        var ry = bins[i].y - playerY;
+        if (ry > -H * 0.5 && ry < 20 * unit) nearCount++;
+      }
+      if (magpieTimer <= 0 && nearCount < 2) {
+        magpieWarn = { lane: player.lane, t: 1.1 };
+        beep(1400, 0.12, 'square', 0.07);
+        beep(1400, 0.12, 'square', 0.07, 1000);
+      }
+    }
+    if (magpieWarn) {
+      magpieWarn.t -= dt;
+      if (magpieWarn.t <= 0) {
+        magpies.push({ lane: magpieWarn.lane, y: -60 * unit, phase: 0 });
+        magpieWarn = null;
+        magpieTimer = 6 + Math.random() * 6;
+        beep(900, 0.25, 'sawtooth', 0.05, 400);
+      }
+    }
+    for (i = magpies.length - 1; i >= 0; i--) {
+      var mg = magpies[i];
+      mg.y += dy * 1.9;
+      mg.phase += dt * 22;
+      if (mg.y > H + 100 * unit) { magpies.splice(i, 1); continue; }
+      var mrel = mg.y - playerY;
+      if (mrel > -(30 * unit + laneW * 0.15) && mrel < 10 * unit &&
+          Math.abs(laneX(mg.lane) - player.x) < laneW * 0.36) {
+        killedBy = 'magpie';
+        gameOver();
+      }
     }
 
     // 장식 이동
@@ -287,6 +335,21 @@
 
     // 주인공
     drawBoy(player.x, playerY);
+
+    // 까치 (주인공 위로 날아다님)
+    for (var g = 0; g < magpies.length; g++) drawMagpie(magpies[g]);
+
+    // 까치 경고
+    if (magpieWarn) {
+      var wx = laneX(magpieWarn.lane);
+      ctx.globalAlpha = Math.sin(magpieWarn.t * 25) > 0 ? 0.95 : 0.4;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = Math.floor(36 * unit) + 'px sans-serif';
+      ctx.fillText('🐦‍⬛', wx, 52 * unit);
+      ctx.font = Math.floor(30 * unit) + 'px sans-serif';
+      ctx.fillText('⚠️', wx, 96 * unit);
+      ctx.globalAlpha = 1;
+    }
 
     ctx.restore();
 
@@ -394,6 +457,63 @@
     ctx.closePath();
   }
 
+  // 호주 까치 (아래로 급강하, 위에서 본 모습)
+  function drawMagpie(m){
+    var u = unit, x = laneX(m.lane), y = m.y;
+    var flap = Math.sin(m.phase);
+    var wingY = -flap * 9 * u;
+    ctx.save();
+    ctx.translate(x, y);
+    // 그림자
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath();
+    ctx.ellipse(0, 30 * u, 16 * u, 4 * u, 0, 0, Math.PI * 2); ctx.fill();
+    // 날개 (펄럭임)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.moveTo(-4 * u, -2 * u);
+    ctx.quadraticCurveTo(-18 * u, wingY - 7 * u, -28 * u, wingY);
+    ctx.quadraticCurveTo(-16 * u, wingY + 8 * u, -4 * u, 5 * u);
+    ctx.closePath(); ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(4 * u, -2 * u);
+    ctx.quadraticCurveTo(18 * u, wingY - 7 * u, 28 * u, wingY);
+    ctx.quadraticCurveTo(16 * u, wingY + 8 * u, 4 * u, 5 * u);
+    ctx.closePath(); ctx.fill();
+    // 날개 흰 무늬
+    ctx.fillStyle = '#f1f2f6';
+    ctx.beginPath();
+    ctx.ellipse(-14 * u, wingY * 0.6, 6 * u, 3 * u, -0.3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(14 * u, wingY * 0.6, 6 * u, 3 * u, 0.3, 0, Math.PI * 2); ctx.fill();
+    // 꼬리 (위쪽, 흰 끝)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(-3.5 * u, -22 * u, 7 * u, 12 * u);
+    ctx.fillStyle = '#f1f2f6';
+    ctx.fillRect(-3.5 * u, -22 * u, 7 * u, 4 * u);
+    // 몸통
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 7 * u, 13 * u, 0, 0, Math.PI * 2); ctx.fill();
+    // 뒷목 흰 무늬 (호주 까치 특징)
+    ctx.fillStyle = '#f1f2f6';
+    ctx.beginPath();
+    ctx.ellipse(0, 5 * u, 5.5 * u, 5 * u, 0, 0, Math.PI * 2); ctx.fill();
+    // 머리 (플레이어 쪽으로)
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(0, 14 * u, 5 * u, 0, Math.PI * 2); ctx.fill();
+    // 부리 (회색)
+    ctx.fillStyle = '#b2bec3';
+    ctx.beginPath();
+    ctx.moveTo(-2 * u, 17 * u); ctx.lineTo(2 * u, 17 * u); ctx.lineTo(0, 24 * u);
+    ctx.closePath(); ctx.fill();
+    // 눈 (빨간 기운 - 급습 모드)
+    ctx.fillStyle = '#ff6b6b';
+    ctx.beginPath(); ctx.arc(-2.5 * u, 13 * u, 1.2 * u, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(2.5 * u, 13 * u, 1.2 * u, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
   // 호주 교복 입은 남자아이 (뒷모습, 달리기)
   function drawBoy(x, y){
     var u = unit;
@@ -412,10 +532,18 @@
     ctx.ellipse(0, 38 * u + bob, 22 * u, 6 * u, 0, 0, Math.PI * 2); ctx.fill();
 
     var skin = '#f5c99b';
+    // 달리기 먼지
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.beginPath(); ctx.arc(-10 * u, 38 * u + bob, (2.5 + Math.abs(leg) * 0.15) * u, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(10 * u, 40 * u + bob, (2 + Math.abs(leg) * 0.12) * u, 0, Math.PI * 2); ctx.fill();
     // 다리 (교차)
     ctx.strokeStyle = skin; ctx.lineWidth = 8 * u; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(-6 * u, 14 * u); ctx.lineTo(-7 * u, 32 * u + leg); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(6 * u, 14 * u); ctx.lineTo(7 * u, 32 * u - leg); ctx.stroke();
+    // 흰 양말
+    ctx.strokeStyle = '#ffffff';
+    ctx.beginPath(); ctx.moveTo(-6.8 * u, 26 * u + leg * 0.8); ctx.lineTo(-7 * u, 31 * u + leg); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(6.8 * u, 26 * u - leg * 0.8); ctx.lineTo(7 * u, 31 * u - leg); ctx.stroke();
     // 신발
     ctx.fillStyle = '#2d3436';
     ctx.beginPath(); ctx.ellipse(-7 * u, 34 * u + leg, 6 * u, 4 * u, 0, 0, Math.PI * 2); ctx.fill();
@@ -440,10 +568,23 @@
     roundRectAt(-11 * u, -20 * u, 22 * u, 22 * u, 6 * u); ctx.fill();
     ctx.fillStyle = '#a02525';
     roundRectAt(-8 * u, -14 * u, 16 * u, 10 * u, 4 * u); ctx.fill();
+    // 가방 지퍼 (노랑)
+    ctx.strokeStyle = '#f6b93b'; ctx.lineWidth = 1.5 * u;
+    ctx.beginPath(); ctx.moveTo(-8 * u, -16 * u); ctx.lineTo(8 * u, -16 * u); ctx.stroke();
     // 가방끈
     ctx.strokeStyle = '#a02525'; ctx.lineWidth = 3 * u;
     ctx.beginPath(); ctx.moveTo(-9 * u, -20 * u); ctx.lineTo(-12 * u, -8 * u); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(9 * u, -20 * u); ctx.lineTo(12 * u, -8 * u); ctx.stroke();
+    // 코알라 열쇠고리 (가방 옆에 달랑달랑)
+    var sway = Math.sin(runPhase * 0.9) * 3 * u;
+    ctx.strokeStyle = '#636e72'; ctx.lineWidth = 1 * u;
+    ctx.beginPath(); ctx.moveTo(11 * u, -6 * u); ctx.lineTo(13 * u + sway * 0.5, 0); ctx.stroke();
+    ctx.fillStyle = '#95a5a6';
+    ctx.beginPath(); ctx.arc(13 * u + sway, 3 * u, 3.5 * u, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(10.5 * u + sway, 0.5 * u, 1.6 * u, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(15.5 * u + sway, 0.5 * u, 1.6 * u, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#2d3436';
+    ctx.beginPath(); ctx.ellipse(13 * u + sway, 3.5 * u, 1 * u, 1.4 * u, 0, 0, Math.PI * 2); ctx.fill();
     // 머리
     ctx.fillStyle = skin;
     ctx.beginPath(); ctx.arc(0, -32 * u, 11 * u, 0, Math.PI * 2); ctx.fill();
@@ -451,12 +592,12 @@
     ctx.fillStyle = '#6d4c2f';
     ctx.beginPath(); ctx.arc(0, -34 * u, 11 * u, Math.PI, Math.PI * 2); ctx.fill();
     ctx.fillRect(-11 * u, -34 * u, 22 * u, 5 * u);
-    // 호주 학교 모자 (챙 넓은 남색 모자)
+    // 호주 학교 모자 (챙 넓은 남색 모자 + 금색 띠)
     ctx.fillStyle = '#1e3a5f';
     ctx.beginPath();
     ctx.ellipse(0, -38 * u, 16 * u, 6 * u, 0, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(0, -40 * u, 9 * u, Math.PI, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#2c5282';
+    ctx.fillStyle = '#f6b93b';
     ctx.fillRect(-9 * u, -42 * u, 18 * u, 3 * u);
 
     ctx.restore();
